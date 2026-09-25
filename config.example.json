@@ -1,0 +1,23 @@
+{
+    "data": "30062026",
+    "processo": "0029.037004/2026-72",
+    "mes_referencia": "06/2026",
+    "linha_inicial": 2,
+    "caminho_planilha": "C:\\Pasta\\SIGEF\\controle.xlsx",
+    "aba_planilha": "",
+    "colunas": {
+        "cpf": "B",
+        "nota_empenho": "D",
+        "banco": "E",
+        "agencia": "F",
+        "conta": "G",
+        "valor": "H",
+        "ce": "I",
+        "nl": "J",
+        "pp": "K",
+        "ob": "L",
+        "raspar_pp_observacao": "M",
+        "raspar_conta_resultado": "M",
+        "raspar_conta_conferencia": "N"
+    }
+}

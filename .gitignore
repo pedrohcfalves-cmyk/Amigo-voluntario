@@ -1,0 +1,43 @@
+# ==============================================================================
+# Amigo - Automações SIGEF
+# ==============================================================================
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Cache e bytecode Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configuração local: contém caminhos de arquivo, número de processo e
+# outros dados reais do usuário/máquina - cada pessoa deve ter a sua
+# própria cópia. Use config.example.json como modelo (copie para
+# config.json e preencha).
+config.json
+
+# Planilhas de trabalho (arquivos .xlsx reais do usuário - nunca dados de
+# produção no repositório)
+*.xlsx
+*.xlsm
+*.xls
+
+# Logs e saídas de depuração
+*.log
+
+# Playwright (navegadores baixados localmente, específicos da máquina)
+.playwright/
+
+# Editor / sistema operacional
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Empacotamento / build
+build/
+dist/
+*.egg-info/
