@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 Carregar/salvar config.json e os menus interativos de parâmetros gerais
 (data, processo, mês de referência, linha inicial, arquivo Excel). A
@@ -16,11 +19,14 @@ from .log import log_sucesso, log_erro, log_aviso
 # Configuração padrão utilizada caso ainda não exista config.json
 CONFIG_PADRAO = {
     "data": "",                 # Ex: 30062026
-    "processo": "",             # Ex: 0029.037004/2026-72
+    "processo": "",             # Processo do Amigo Voluntário. Ex: 0029.037004/2026-72
     "mes_referencia": "",       # Ex: 06/2026 (sempre o mês anterior!)
     "linha_inicial": 2,         # Ex: 37
     "caminho_planilha": "",     # Ex: C:\\Pasta\\SIGEF\\controle.xlsx
     "aba_planilha": "",         # Nome da aba (opcional; se vazio, usa a 1ª aba)
+    "ano_sigef": "",            # Ano do exercício do SIGEF (vazio = ano da "data")
+    "observacao_ce": "",        # Texto da observação da CE (vazio = texto padrão)
+    "observacao_ob": "",        # Texto da observação da OB (vazio = texto padrão)
 
     # "Colunas Retráteis": em qual coluna da planilha do usuário está (ou
     # deve ser salvo) cada dado. O padrão de fábrica vem de
@@ -96,7 +102,7 @@ def configurar_parametros(config: dict) -> dict:
         config["data"] = data
 
     processo = input(
-        f"PROCESSO (ex: 0029.037004/2026-72) [{config.get('processo') or 'vazio'}]: "
+        f"PROCESSO do Amigo Voluntário (ex: 0029.037004/2026-72) [{config.get('processo') or 'vazio'}]: "
     ).strip()
     if processo:
         config["processo"] = processo
@@ -169,6 +175,9 @@ def exibir_configuracoes(config: dict):
     print(f"LINHA INICIAL ........: {config.get('linha_inicial')}")
     print(f"ARQUIVO EXCEL ........: {config.get('caminho_planilha') or '(não definido)'}")
     print(f"ABA ..................: {config.get('aba_planilha') or '(1ª aba)'}")
+    print(f"ANO DO SIGEF .........: {config.get('ano_sigef') or '(automático, pela data)'}")
+    print(f"OBSERVAÇÃO DA CE .....: {config.get('observacao_ce') or '(texto padrão)'}")
+    print(f"OBSERVAÇÃO DA OB .....: {config.get('observacao_ob') or '(texto padrão)'}")
     print("-" * 50)
     exibir_colunas_atuais(config)
 

@@ -1,6 +1,10 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """Automação Raspar contas (confere banco/agência/conta gravados no SIGEF)."""
 from .. import colunas
-from ..constantes import URL_RASPAR_CONTA_SIGEF, MARCADOR_URL_RASPAR_CONTA
+from ..constantes import URL_RASPAR_CONTA_SIGEF, MARCADOR_URL_RASPAR_CONTA, url_do_exercicio
+from ..execucao import eh_simulado, informar_progresso, parar_antes_da_linha
 from ..excel import obter_celula, atualizar_status, salvar_valor_gerado
 from ..log import log_info, log_sucesso, log_erro, log_aviso
 from ..navegador import conectar_e_obter_pagina_sigef, aguardar_pagina_estavel, fechar_paginas, abrir_popup
@@ -54,7 +58,7 @@ def raspar_conta(dados, config=None, worksheet=None):
     with sync_playwright() as p:
         try:
             context, page = conectar_e_obter_pagina_sigef(
-                p, URL_RASPAR_CONTA_SIGEF, MARCADOR_URL_RASPAR_CONTA
+                p, url_do_exercicio(URL_RASPAR_CONTA_SIGEF, config), MARCADOR_URL_RASPAR_CONTA
             )
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de listagem de PP do SIGEF: {erro}")
@@ -73,9 +77,15 @@ def raspar_conta(dados, config=None, worksheet=None):
         total_diferentes = 0
 
         for indice, linha in enumerate(dados):
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            informar_progresso(indice + 1, len(dados))
             numero_linha = linha_inicial + indice
 
             pp_bruta = obter_celula(linha, colunas.COL_RASPAR_CONTA_PP)
+            if eh_simulado(pp_bruta):
+                log_aviso(f"Linha {numero_linha}: PP só simulada - nada para conferir. Pulando.")
+                continue
             if not pp_bruta:
                 log_aviso(f"Linha {numero_linha}: PP (coluna K) vazia. Pulando.")
                 continue
@@ -204,5 +214,6 @@ def raspar_conta(dados, config=None, worksheet=None):
             f"{len(dados)} linha(s) processada(s) - {total_iguais} igual(is) e "
             f"{total_diferentes} diferente(s)."
         )
+        return total_processadas
 
 

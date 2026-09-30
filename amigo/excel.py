@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 EXCEL (pywin32/COM)
 ====================
@@ -269,6 +272,17 @@ def executar_escrita_com_retentativa(func_escrita, *args, max_tentativas: int = 
             espera = min(espera * 2, 10)
 
 
+def _somente_memoria(worksheet) -> bool:
+    """
+    True quando `worksheet` é a "planilha em memória" da aba Lançamento
+    Manual (`lancamento_manual.PlanilhaVirtual`) - nesse caso nada vai
+    para o Excel, e as mensagens do painel não podem dizer que foi salvo
+    "na planilha". Olha o atributo na CLASSE, nunca no objeto: um objeto
+    COM do Excel tentaria responder a qualquer nome perguntado.
+    """
+    return bool(getattr(type(worksheet), "SOMENTE_MEMORIA", False))
+
+
 def atualizar_status(worksheet, linha: int, coluna: int, status: str):
     """Atualiza uma célula específica (ex: coluna de status) com o valor informado."""
     if worksheet is None:
@@ -281,6 +295,9 @@ def atualizar_status(worksheet, linha: int, coluna: int, status: str):
 
     try:
         executar_escrita_com_retentativa(_escrever)
+        if _somente_memoria(worksheet):
+            log_info(f"Pessoa {linha}: resposta do SIGEF guardada na tela - '{status}'.")
+            return
         log_sucesso(f"Status da linha {linha} atualizado para '{status}'.")
     except Exception as erro:
         log_erro(f"Erro ao atualizar status da linha {linha}: {erro}")
@@ -308,6 +325,9 @@ def salvar_valor_gerado(worksheet, linha: int, coluna: int, valor: str, rotulo: 
 
     try:
         executar_escrita_com_retentativa(_escrever)
+        if _somente_memoria(worksheet):
+            log_sucesso(f"{rotulo} '{valor}' recebido(a) do SIGEF (pessoa {linha}) - fica só na tela, não vai para a planilha.")
+            return
         letra_coluna = colunas.indice_para_letra_coluna(coluna)
         log_sucesso(f"{rotulo} '{valor}' salvo(a) na planilha (linha {linha}, coluna {letra_coluna}).")
     except Exception as erro:

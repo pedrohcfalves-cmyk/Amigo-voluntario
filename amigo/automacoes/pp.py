@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """Automação PP (Preparação de Pagamento) e Raspar PP."""
 from datetime import datetime
 
@@ -6,7 +9,10 @@ from ..constantes import (
     URL_PP_SIGEF, MARCADOR_URL_PP, URL_RASPAR_CONTA_SIGEF, MARCADOR_URL_RASPAR_CONTA,
     TIMEOUT_PADRAO_SIGEF, TIMEOUT_POPUP_FECHAR, TIMEOUT_CLIQUE_GRADE, TENTATIVAS_CLIQUE_GRADE,
     TIPO_ORDEM_BANCARIA_PP, REGEX_APENAS_DIGITOS, REGEX_PREFIXO_DOCUMENTO, REGEX_DOCUMENTO_PP,
-    REGEX_NUMEROS, REGEX_VALOR_BR,
+    REGEX_NUMEROS, REGEX_VALOR_BR, ano_do_exercicio, url_do_exercicio,
+)
+from ..execucao import (
+    eh_simulado, em_simulacao, informar_progresso, linha_em_execucao, parar_antes_da_linha,
 )
 from ..excel import obter_celula, atualizar_status, salvar_valor_gerado
 from ..log import log_info, log_sucesso, log_erro, log_aviso
@@ -306,16 +312,19 @@ def _selecionar_domicilio_bancario(page: "Page", context: "BrowserContext",
     return True
 
 
-def _ano_do_documento(codigo_completo: str) -> str:
+def _ano_do_documento(codigo_completo: str, ano_padrao=None) -> str:
     """
     Devolve o ano (prefixo "AAAA") de um identificador do SIGEF gravado na
-    planilha (ex: "2026NL065995" -> "2026"). Quando a célula traz só o
-    número, sem prefixo, usa o ano corrente - evita ano fixo no código.
+    planilha (ex: "2027NL065995" -> "2027"). Quando a célula traz só o
+    número, sem prefixo, usa `ano_padrao` (o ano do exercício da
+    automação - ver `constantes.ano_do_exercicio`) ou, sem ele, o ano atual.
+    Assim, em janeiro, uma NL "065995" sem prefixo continua sendo procurada
+    no exercício certo.
     """
     texto = str(codigo_completo).strip()
     if REGEX_PREFIXO_DOCUMENTO.match(texto):
         return texto[:4]
-    return str(datetime.now().year)
+    return str(ano_padrao or datetime.now().year)
 
 
 def pp(dados, config=None, worksheet=None):
@@ -358,7 +367,8 @@ def pp(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_PP_SIGEF, MARCADOR_URL_PP)
+            log_info(f"Exercício do SIGEF: {ano_do_exercicio(config)}.")
+            context, page = conectar_e_obter_pagina_sigef(p, url_do_exercicio(URL_PP_SIGEF, config), MARCADOR_URL_PP)
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de preparação de pagamento do SIGEF: {erro}")
             return
@@ -382,179 +392,201 @@ def pp(dados, config=None, worksheet=None):
 
         # ---- Parte em loop até a última linha da planilha ------------------
         for indice, linha in enumerate(dados):
-            numero_linha = linha_inicial + indice
-            janelas = []
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            with linha_em_execucao("PP", worksheet, linha_inicial + indice, colunas.COL_PP_GERADA, indice + 1, len(dados)) as execucao_linha:
+                numero_linha = linha_inicial + indice
+                janelas = []
 
-            numero_nl = obter_celula(linha, colunas.COL_PP_NL)
-            numero_ce = obter_celula(linha, colunas.COL_PP_CE)
-            banco = obter_celula(linha, colunas.COL_PP_BANCO)
-            agencia = obter_celula(linha, colunas.COL_PP_AGENCIA)
-            conta = obter_celula(linha, colunas.COL_PP_CONTA)
+                numero_nl = obter_celula(linha, colunas.COL_PP_NL)
+                numero_ce = obter_celula(linha, colunas.COL_PP_CE)
+                banco = obter_celula(linha, colunas.COL_PP_BANCO)
+                agencia = obter_celula(linha, colunas.COL_PP_AGENCIA)
+                conta = obter_celula(linha, colunas.COL_PP_CONTA)
 
-            if not numero_nl or not numero_ce:
-                log_aviso(f"Linha {numero_linha}: NL ou CE vazia. Pulando.")
-                continue
+                if not numero_nl or not numero_ce:
+                    log_aviso(f"Linha {numero_linha}: NL ou CE vazia. Pulando.")
+                    continue
 
-            if not banco or not agencia or not conta:
-                log_aviso(f"Linha {numero_linha}: banco, agência ou conta vazio. Pulando.")
-                continue
+                if not banco or not agencia or not conta:
+                    log_aviso(f"Linha {numero_linha}: banco, agência ou conta vazio. Pulando.")
+                    continue
 
-            try:
-                campo_gestao.fill("00001")
-                campo_data_referencia.fill(data_referencia)
-
-                with context.expect_page() as pagina_pesquisa_info:
-                    botao_pesquisar_nl.click()
-
-                pagina_pesquisa = pagina_pesquisa_info.value
-                janelas.append(pagina_pesquisa)
-
-                # Espera o link que será usado, em vez de esperar a rede parar.
-                link_fora_ordem = pagina_pesquisa.locator("#lnkNaoObedeceOrdemCronologica")
-                link_fora_ordem.wait_for(state="visible")
-
-                with context.expect_page() as pagina_lancamento_info:
-                    link_fora_ordem.click()
-
-                pagina_lancamento = pagina_lancamento_info.value
-                janelas.append(pagina_lancamento)
-
-                campo_sigla_nl = pagina_lancamento.locator("#txtNotaLancamentoSigla")
-                campo_sigla_nl.wait_for(state="visible")
-
-                campo_sigla_nl.fill(_ano_do_documento(numero_nl))
-                pagina_lancamento.locator("#txtDespesaCertificadaSigla").fill(_ano_do_documento(numero_ce))
-                pagina_lancamento.locator("#txtNotaLancamento_SIGEFPesquisa").fill(
-                    extrair_numero_documento(numero_nl).zfill(6)
-                )
-                pagina_lancamento.locator("#txtDespesaCertificada_SIGEFPesquisa").fill(
-                    extrair_numero_documento(numero_ce).zfill(6)
-                )
-                pagina_lancamento.locator("#btnConfirmar").click()
-
-                # Espera o postback da pesquisa terminar e a GRADE existir na
-                # tela antes de qualquer leitura ou clique - sem isso, a
-                # comparação rodava com a tabela ainda vazia.
-                aguardar_pagina_estavel(pagina_lancamento)
-                pagina_lancamento.wait_for_selector(
-                    "#divdtgGerarOrdemCronologica", timeout=TIMEOUT_PADRAO_SIGEF
-                )
-
-                registro_grade = pagina_lancamento.locator("#divdtgGerarOrdemCronologica td.GridLink")
-                mensagem_erro_grade = pagina_lancamento.locator("td.SIGEFMensagemErro")
-
-                if not _aguardar_resultado_ou_erro_grade(registro_grade, mensagem_erro_grade):
+                if eh_simulado(numero_nl) or eh_simulado(numero_ce):
                     log_aviso(
-                        f"Linha {numero_linha}: nenhuma preparação encontrada para a NL "
-                        f"{numero_nl} / CE {numero_ce}. Pulando para a próxima linha."
+                        f"Linha {numero_linha}: a CE ou a NL desta linha foi só SIMULADA - a PP "
+                        f"precisa de CE e NL de verdade. Pulando."
                     )
+                    continue
+
+                execucao_linha.tentando()
+                try:
+                    campo_gestao.fill("00001")
+                    campo_data_referencia.fill(data_referencia)
+
+                    with context.expect_page() as pagina_pesquisa_info:
+                        botao_pesquisar_nl.click()
+
+                    pagina_pesquisa = pagina_pesquisa_info.value
+                    janelas.append(pagina_pesquisa)
+
+                    # Espera o link que será usado, em vez de esperar a rede parar.
+                    link_fora_ordem = pagina_pesquisa.locator("#lnkNaoObedeceOrdemCronologica")
+                    link_fora_ordem.wait_for(state="visible")
+
+                    with context.expect_page() as pagina_lancamento_info:
+                        link_fora_ordem.click()
+
+                    pagina_lancamento = pagina_lancamento_info.value
+                    janelas.append(pagina_lancamento)
+
+                    campo_sigla_nl = pagina_lancamento.locator("#txtNotaLancamentoSigla")
+                    campo_sigla_nl.wait_for(state="visible")
+
+                    ano_exercicio = ano_do_exercicio(config)
+                    campo_sigla_nl.fill(_ano_do_documento(numero_nl, ano_exercicio))
+                    pagina_lancamento.locator("#txtDespesaCertificadaSigla").fill(_ano_do_documento(numero_ce, ano_exercicio))
+                    pagina_lancamento.locator("#txtNotaLancamento_SIGEFPesquisa").fill(
+                        extrair_numero_documento(numero_nl).zfill(6)
+                    )
+                    pagina_lancamento.locator("#txtDespesaCertificada_SIGEFPesquisa").fill(
+                        extrair_numero_documento(numero_ce).zfill(6)
+                    )
+                    pagina_lancamento.locator("#btnConfirmar").click()
+
+                    # Espera o postback da pesquisa terminar e a GRADE existir na
+                    # tela antes de qualquer leitura ou clique - sem isso, a
+                    # comparação rodava com a tabela ainda vazia.
+                    aguardar_pagina_estavel(pagina_lancamento)
+                    pagina_lancamento.wait_for_selector(
+                        "#divdtgGerarOrdemCronologica", timeout=TIMEOUT_PADRAO_SIGEF
+                    )
+
+                    registro_grade = pagina_lancamento.locator("#divdtgGerarOrdemCronologica td.GridLink")
+                    mensagem_erro_grade = pagina_lancamento.locator("td.SIGEFMensagemErro")
+
+                    if not _aguardar_resultado_ou_erro_grade(registro_grade, mensagem_erro_grade):
+                        log_aviso(
+                            f"Linha {numero_linha}: nenhuma preparação encontrada para a NL "
+                            f"{numero_nl} / CE {numero_ce}. Pulando para a próxima linha."
+                        )
+                        fechar_paginas(janelas)
+                        page.bring_to_front()
+                        continue
+
+                    if not _selecionar_registro_ordem_cronologica(
+                        page, pagina_lancamento, registro_grade,
+                        numero_nl, numero_ce, numero_linha
+                    ):
+                        fechar_paginas(janelas)
+                        limpar_formulario(page)
+                        continue
+
                     fechar_paginas(janelas)
                     page.bring_to_front()
-                    continue
 
-                if not _selecionar_registro_ordem_cronologica(
-                    page, pagina_lancamento, registro_grade,
-                    numero_nl, numero_ce, numero_linha
-                ):
-                    fechar_paginas(janelas)
-                    limpar_formulario(page)
-                    continue
-
-                fechar_paginas(janelas)
-                page.bring_to_front()
-
-                if not selecionar_combo_com_conferencia(page, combo_tipo_ordem, TIPO_ORDEM_BANCARIA_PP):
-                    log_erro(
-                        f"Linha {numero_linha}: não foi possível selecionar o Tipo de Ordem "
-                        f"Bancária. Pulando para a próxima linha."
-                    )
-                    limpar_formulario(page)
-                    continue
-
-                # Última conferência antes de abrir a pesquisa da conta: se um
-                # postback tardio limpou o combo, a seleção é refeita.
-                if combo_tipo_ordem.input_value() != TIPO_ORDEM_BANCARIA_PP:
-                    log_aviso(
-                        f"Linha {numero_linha}: o Tipo de Ordem Bancária foi limpo por um "
-                        f"recarregamento da tela. Selecionando novamente."
-                    )
                     if not selecionar_combo_com_conferencia(page, combo_tipo_ordem, TIPO_ORDEM_BANCARIA_PP):
                         log_erro(
-                            f"Linha {numero_linha}: não foi possível manter o Tipo de Ordem "
-                            f"Bancária selecionado. Pulando para a próxima linha."
+                            f"Linha {numero_linha}: não foi possível selecionar o Tipo de Ordem "
+                            f"Bancária. Pulando para a próxima linha."
                         )
                         limpar_formulario(page)
                         continue
 
-                if not _selecionar_domicilio_bancario(page, context, banco, agencia, conta):
-                    fechar_paginas(janelas)
-                    limpar_formulario(page)
-                    continue
+                    # Última conferência antes de abrir a pesquisa da conta: se um
+                    # postback tardio limpou o combo, a seleção é refeita.
+                    if combo_tipo_ordem.input_value() != TIPO_ORDEM_BANCARIA_PP:
+                        log_aviso(
+                            f"Linha {numero_linha}: o Tipo de Ordem Bancária foi limpo por um "
+                            f"recarregamento da tela. Selecionando novamente."
+                        )
+                        if not selecionar_combo_com_conferencia(page, combo_tipo_ordem, TIPO_ORDEM_BANCARIA_PP):
+                            log_erro(
+                                f"Linha {numero_linha}: não foi possível manter o Tipo de Ordem "
+                                f"Bancária selecionado. Pulando para a próxima linha."
+                            )
+                            limpar_formulario(page)
+                            continue
 
-                # Cada clique espera apenas o elemento SEGUINTE aparecer.
-                clicar_e_aguardar_elemento(page, "#btnRetencoes", "img[src*='aba_confirmacao.gif']")
-                clicar_e_aguardar_elemento(page, "img[src*='aba_confirmacao.gif']", "#btnConfirmar")
+                    if not _selecionar_domicilio_bancario(page, context, banco, agencia, conta):
+                        fechar_paginas(janelas)
+                        limpar_formulario(page)
+                        continue
 
-                # Depois deste clique, quem manda é o `wait_for_selector` abaixo.
-                clicar_e_aguardar_elemento(page, "#btnConfirmar")
+                    # MODO SIMULAÇÃO: NL/CE localizadas, tipo de OB e domicílio
+                    # bancário conferidos - para ANTES das retenções/confirmação
+                    # (que gerariam a PP) e limpa o formulário.
+                    if em_simulacao():
+                        execucao_linha.simulado_ok(f"NL {numero_nl}, conta {banco}/{agencia}/{conta}")
+                        limpar_formulario(page)
+                        total_processadas += 1
+                        continue
 
-                page.wait_for_selector(
-                    "td.SIGEFMensagemSucesso, td.SIGEFMensagemErro",
-                    timeout=TIMEOUT_PADRAO_SIGEF,
-                )
+                    # Cada clique espera apenas o elemento SEGUINTE aparecer.
+                    clicar_e_aguardar_elemento(page, "#btnRetencoes", "img[src*='aba_confirmacao.gif']")
+                    clicar_e_aguardar_elemento(page, "img[src*='aba_confirmacao.gif']", "#btnConfirmar")
 
-                if page.locator("td.SIGEFMensagemErro").count() > 0:
-                    # O SIGEF recusou o lançamento (ex: saldo insuficiente ou
-                    # data de referência anterior à da NE/NL). O motivo vai
-                    # para a coluna K, para aparecer na planilha.
-                    mensagem_erro = page.locator("td.SIGEFMensagemErro").first.inner_text().strip()
-                    log_erro(f"Linha {numero_linha}: SIGEF recusou a PP - {mensagem_erro}")
-                    atualizar_status(worksheet, numero_linha, colunas.COL_PP_GERADA, mensagem_erro)
-                    limpar_formulario(page)
-                    continue
+                    # Depois deste clique, quem manda é o `wait_for_selector` abaixo.
+                    clicar_e_aguardar_elemento(page, "#btnConfirmar")
 
-                mensagem_sucesso = page.locator("td.SIGEFMensagemSucesso").first.inner_text().strip()
-                busca_pp = REGEX_DOCUMENTO_PP.search(mensagem_sucesso)
-
-                if busca_pp is None:
-                    log_erro(
-                        f"Linha {numero_linha}: não foi possível extrair o número da PP "
-                        f"da mensagem do SIGEF ({mensagem_sucesso})."
+                    page.wait_for_selector(
+                        "td.SIGEFMensagemSucesso, td.SIGEFMensagemErro",
+                        timeout=TIMEOUT_PADRAO_SIGEF,
                     )
+
+                    if page.locator("td.SIGEFMensagemErro").count() > 0:
+                        # O SIGEF recusou o lançamento (ex: saldo insuficiente ou
+                        # data de referência anterior à da NE/NL). O motivo vai
+                        # para a coluna K, para aparecer na planilha.
+                        mensagem_erro = page.locator("td.SIGEFMensagemErro").first.inner_text().strip()
+                        log_erro(f"Linha {numero_linha}: SIGEF recusou a PP - {mensagem_erro}")
+                        atualizar_status(worksheet, numero_linha, colunas.COL_PP_GERADA, mensagem_erro)
+                        limpar_formulario(page)
+                        continue
+
+                    mensagem_sucesso = page.locator("td.SIGEFMensagemSucesso").first.inner_text().strip()
+                    busca_pp = REGEX_DOCUMENTO_PP.search(mensagem_sucesso)
+
+                    if busca_pp is None:
+                        log_erro(
+                            f"Linha {numero_linha}: não foi possível extrair o número da PP "
+                            f"da mensagem do SIGEF ({mensagem_sucesso})."
+                        )
+                        limpar_formulario(page)
+                        continue
+
+                    numero_pp = busca_pp.group(0).upper()
+                    log_sucesso(f"Linha {numero_linha}: PP '{numero_pp}' gerada.")
+                    salvar_valor_gerado(worksheet, numero_linha, colunas.COL_PP_GERADA, numero_pp, rotulo="PP")
+                    total_processadas += 1
+
+                    # Limpa o formulário antes de reiniciar o loop na próxima linha.
                     limpar_formulario(page)
+
+                except PlaywrightTimeoutError as erro:
+                    log_erro(f"Timeout ao processar a linha {numero_linha} da automação PP: {erro}")
+                    fechar_paginas(janelas)
+                    page.bring_to_front()
+                    try:
+                        limpar_formulario(page)
+                    except Exception as erro_limpar:
+                        log_aviso(f"Linha {numero_linha}: não foi possível clicar em Limpar após o timeout: {erro_limpar}")
                     continue
 
-                numero_pp = busca_pp.group(0).upper()
-                log_sucesso(f"Linha {numero_linha}: PP '{numero_pp}' gerada.")
-                salvar_valor_gerado(worksheet, numero_linha, colunas.COL_PP_GERADA, numero_pp, rotulo="PP")
-                total_processadas += 1
-
-                # Limpa o formulário antes de reiniciar o loop na próxima linha.
-                limpar_formulario(page)
-
-            except PlaywrightTimeoutError as erro:
-                log_erro(f"Timeout ao processar a linha {numero_linha} da automação PP: {erro}")
-                fechar_paginas(janelas)
-                page.bring_to_front()
-                try:
-                    limpar_formulario(page)
-                except Exception as erro_limpar:
-                    log_aviso(f"Linha {numero_linha}: não foi possível clicar em Limpar após o timeout: {erro_limpar}")
-                continue
-
-            except Exception as erro:
-                log_erro(f"Erro ao processar a linha {numero_linha} da automação PP: {erro}")
-                fechar_paginas(janelas)
-                page.bring_to_front()
-                try:
-                    limpar_formulario(page)
-                except Exception:
-                    pass
-                continue
+                except Exception as erro:
+                    log_erro(f"Erro ao processar a linha {numero_linha} da automação PP: {erro}")
+                    fechar_paginas(janelas)
+                    page.bring_to_front()
+                    try:
+                        limpar_formulario(page)
+                    except Exception:
+                        pass
+                    continue
 
         log_sucesso(
             f"Automação PP concluída: {total_processadas} de {len(dados)} linha(s) processada(s)."
         )
+        return total_processadas
 
 
 def ler_tabela_pp_geral(page: "Page"):
@@ -721,7 +753,7 @@ def raspar_pp(dados, config=None, worksheet=None):
     with sync_playwright() as p:
         try:
             context, page = conectar_e_obter_pagina_sigef(
-                p, URL_RASPAR_CONTA_SIGEF, MARCADOR_URL_RASPAR_CONTA
+                p, url_do_exercicio(URL_RASPAR_CONTA_SIGEF, config), MARCADOR_URL_RASPAR_CONTA
             )
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de listagem de PP do SIGEF: {erro}")
@@ -737,6 +769,9 @@ def raspar_pp(dados, config=None, worksheet=None):
         total_divergentes = 0
 
         for indice, linha in enumerate(dados):
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            informar_progresso(indice + 1, len(dados))
             numero_linha = linha_inicial + indice
 
             cpf = obter_celula(linha, colunas.COL_RASPAR_PP_CPF)
@@ -746,6 +781,10 @@ def raspar_pp(dados, config=None, worksheet=None):
 
             if not cpf or not valor_bruto:
                 log_aviso(f"Linha {numero_linha}: CPF ou valor (coluna H) vazio. Pulando.")
+                continue
+
+            if eh_simulado(ce_esperada) or eh_simulado(nl_esperada):
+                log_aviso(f"Linha {numero_linha}: CE ou NL só simulada - nada para buscar. Pulando.")
                 continue
 
             if not ce_esperada or not nl_esperada:
@@ -882,5 +921,6 @@ def raspar_pp(dados, config=None, worksheet=None):
             f"linha(s) processada(s) - {total_correspondentes} correspondente(s) e "
             f"{total_divergentes} divergente(s)."
         )
+        return total_processadas
 
 

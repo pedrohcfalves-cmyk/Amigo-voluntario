@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 Constantes do sistema: ambiente SIGEF (homologação/produção), URLs de cada
 tela, timeouts e regex pré-compiladas. NADA aqui é configurável pelo
@@ -9,40 +12,81 @@ import re
 DOMINIO_SIGEF = "sigef.sefin.ro.gov.br"  # <-- ambiente de PRODUÇÃO
 
 # ==============================================================================
-# URLs DO SIGEF
+# URLs DO SIGEF (com o ANO DO EXERCÍCIO)
 # ==============================================================================
-# Como as demais automações (NL, PP, OB) ainda serão programadas, deixe
-# aqui as URLs de cada tela do SIGEF assim que você definir cada fluxo -
-# por exemplo:
-#
-#   URL_NL_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/....aspx"
-#   URL_PP_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/....aspx"
-#   URL_OB_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/....aspx"
+# O endereço de cada tela do SIGEF muda todo ano: /SIGEF2026/, /SIGEF2027/...
+# Por isso as URLs abaixo são MODELOS com "{ano}" no lugar do ano - quem abre
+# a tela usa `url_do_exercicio(URL_..., config)`, que troca "{ano}" pelo ano
+# certo (ver `ano_do_exercicio`). Assim, na virada de 2026 para 2027, nada
+# precisa ser alterado no código: os documentos passam a sair como
+# 2027CE..., 2027NL..., 2027PP..., 2027OB... (as regex mais abaixo já
+# aceitam qualquer ano).
 
 # Tela "Manter Despesa Certificada" (CE).
-URL_CE_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINManterDespesaCertificada.aspx?CdTransacao=121"
+URL_CE_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINManterDespesaCertificada.aspx?CdTransacao=121"
 MARCADOR_URL_CE = "FINManterDespesaCertificada"
 
 # Tela "Listar Despesa Certificada Geral" (Raspar CE).
-URL_RASPAR_CE_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINListarDespesaCertificadaGeral.aspx?CdTransacao=123"
+URL_RASPAR_CE_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINListarDespesaCertificadaGeral.aspx?CdTransacao=123"
 MARCADOR_URL_RASPAR_CE = "FINListarDespesaCertificadaGeral"
 
 # Tela "Liquidar Despesa Certificada" (NL).
-URL_NL_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINLiquidarDespesaCertificada.aspx?CdTransacao=160"
+URL_NL_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINLiquidarDespesaCertificada.aspx?CdTransacao=160"
 MARCADOR_URL_NL = "FINLiquidarDespesaCertificada"
 
 # Tela "Preparação Pagamento Despesa Empenhada" (PP).
-URL_PP_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINPreparacaoPagamentoDespesaEmpenhada.aspx?CdTransacao=250"
+URL_PP_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINPreparacaoPagamentoDespesaEmpenhada.aspx?CdTransacao=250"
 MARCADOR_URL_PP = "FINPreparacaoPagamentoDespesaEmpenhada"
 
 # Tela "Listar Preparação Pagamento Geral" (Raspar contas).
-URL_RASPAR_CONTA_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINListarPreparacaoPagamentoGeral.aspx?CdTransacao=181"
+URL_RASPAR_CONTA_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINListarPreparacaoPagamentoGeral.aspx?CdTransacao=181"
 MARCADOR_URL_RASPAR_CONTA = "FINListarPreparacaoPagamentoGeral"
 
 # Tela "Manter Ordem Bancária" (Gerar OB, lote de 30 em 30, fluxo
 # Descentralizada / Tipo de OB "2").
-URL_OB_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF2026/FIN/FINManterOrdemBancaria.aspx?CdTransacao=214"
+URL_OB_SIGEF = f"http://{DOMINIO_SIGEF}/SIGEF{{ano}}/FIN/FINManterOrdemBancaria.aspx?CdTransacao=214"
 MARCADOR_URL_OB = "FINManterOrdemBancaria"
+
+# Pedaço da URL que identifica o exercício (ex: "/SIGEF2027/").
+REGEX_SEGMENTO_EXERCICIO = re.compile(r"/SIGEF(\d{4})/", re.IGNORECASE)
+
+
+def ano_do_exercicio(config=None) -> int:
+    """
+    Ano do exercício do SIGEF usado nas URLs, nesta ordem de prioridade:
+
+      1. `config["ano_sigef"]` - o campo "Ano do SIGEF" dos Parâmetros,
+         quando preenchido (só para casos especiais, ex: lançar em janeiro
+         ainda no exercício anterior);
+      2. o ano da "Data" dos parâmetros (DDMMAAAA) - a data da operação é
+         que define o exercício: uma Data 15012027 vai para o SIGEF2027;
+      3. o ano atual do computador.
+    """
+    from datetime import datetime
+
+    config = config or {}
+    ano_manual = str(config.get("ano_sigef") or "").strip()
+    if ano_manual.isdigit() and len(ano_manual) == 4:
+        return int(ano_manual)
+
+    digitos = re.sub(r"\D", "", str(config.get("data") or ""))
+    if len(digitos) == 8:
+        try:
+            return datetime(int(digitos[4:]), int(digitos[2:4]), int(digitos[:2])).year
+        except ValueError:
+            pass
+    return datetime.now().year
+
+
+def url_do_exercicio(modelo: str, config=None) -> str:
+    """Troca "{ano}" do modelo de URL pelo ano do exercício (ver
+    `ano_do_exercicio`). Também aceita uma URL já com ano fixo
+    (/SIGEF2026/): o ano dela é substituído do mesmo jeito."""
+    ano = ano_do_exercicio(config)
+    if "{ano}" in modelo:
+        return modelo.replace("{ano}", str(ano))
+    return REGEX_SEGMENTO_EXERCICIO.sub(f"/SIGEF{ano}/", modelo)
+
 
 TIMEOUT_PADRAO_SIGEF = 30000  # 30s
 

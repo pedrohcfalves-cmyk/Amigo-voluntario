@@ -1,10 +1,16 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """Automação NL (Nota de Lançamento / Liquidação) e Raspar NL."""
 import time
 
 from .. import colunas
 from ..constantes import (
     URL_RASPAR_CE_SIGEF, MARCADOR_URL_RASPAR_CE, URL_NL_SIGEF, MARCADOR_URL_NL,
-    TIMEOUT_PADRAO_SIGEF,
+    TIMEOUT_PADRAO_SIGEF, ano_do_exercicio, url_do_exercicio,
+)
+from ..execucao import (
+    eh_simulado, em_simulacao, informar_progresso, linha_em_execucao, parar_antes_da_linha,
 )
 from ..excel import obter_celula, salvar_valor_gerado
 from ..log import log_info, log_sucesso, log_erro, log_aviso
@@ -142,7 +148,8 @@ def nl(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_NL_SIGEF, MARCADOR_URL_NL)
+            log_info(f"Exercício do SIGEF: {ano_do_exercicio(config)}.")
+            context, page = conectar_e_obter_pagina_sigef(p, url_do_exercicio(URL_NL_SIGEF, config), MARCADOR_URL_NL)
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de liquidação de despesa certificada do SIGEF: {erro}")
             return
@@ -171,141 +178,165 @@ def nl(dados, config=None, worksheet=None):
 
         # ---- Parte em loop até a última linha da planilha ------------------
         for indice, linha in enumerate(dados):
-            numero_linha = linha_inicial + indice
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            with linha_em_execucao("NL", worksheet, linha_inicial + indice, colunas.COL_NL_GERADA, indice + 1, len(dados)) as execucao_linha:
+                numero_linha = linha_inicial + indice
 
-            numero_ce = obter_celula(linha, colunas.COL_NL_CE)
-            numero_ne = obter_celula(linha, colunas.COL_NL_NE)
-            valor_bruto = obter_celula(linha, colunas.COL_CE_VALOR)
+                numero_ce = obter_celula(linha, colunas.COL_NL_CE)
+                numero_ne = obter_celula(linha, colunas.COL_NL_NE)
+                valor_bruto = obter_celula(linha, colunas.COL_CE_VALOR)
 
-            if not numero_ce or not numero_ne or not valor_bruto:
-                log_aviso(f"Linha {numero_linha}: CE, NE ou valor vazio. Pulando.")
-                continue
+                if not numero_ce or not numero_ne or not valor_bruto:
+                    log_aviso(f"Linha {numero_linha}: CE, NE ou valor vazio. Pulando.")
+                    continue
 
-            try:
-                campo_gestao.fill("00001")
-                campo_ce_pesquisa.fill(extrair_numero_documento(numero_ce).zfill(6))
-                botao_pesquisar.click()
-                aguardar_pagina_estavel(page)
-
-                # Verifica se essa despesa certificada JÁ TEM alguma NL
-                # lançada antes de prosseguir - se já existir e o valor
-                # bater (mesmo critério da checagem final, após
-                # confirmar), só salva e reinicia o ciclo sem lançar uma
-                # nova liquidação por cima.
-                valor_liquido_esperado = formatar_valor_br(valor_bruto)
-                documentos_existentes = _extrair_documentos_grade(page)
-
-                if documentos_existentes:
-                    nl_existente, valor_liquido_existente = _selecionar_documento_correspondente(
-                        documentos_existentes, valor_liquido_esperado
+                if eh_simulado(numero_ce):
+                    log_aviso(
+                        f"Linha {numero_linha}: a CE desta linha foi só SIMULADA - a NL precisa de "
+                        f"uma CE de verdade. Pulando."
                     )
+                    continue
 
-                    if valor_liquido_existente == valor_liquido_esperado:
-                        log_sucesso(
-                            f"Linha {numero_linha}: NL '{nl_existente}' já lançada, valor líquido "
-                            f"{valor_liquido_existente} confere com a planilha. NL salva."
+                execucao_linha.tentando()
+                try:
+                    campo_gestao.fill("00001")
+                    campo_ce_pesquisa.fill(extrair_numero_documento(numero_ce).zfill(6))
+                    botao_pesquisar.click()
+                    aguardar_pagina_estavel(page)
+
+                    # Verifica se essa despesa certificada JÁ TEM alguma NL
+                    # lançada antes de prosseguir - se já existir e o valor
+                    # bater (mesmo critério da checagem final, após
+                    # confirmar), só salva e reinicia o ciclo sem lançar uma
+                    # nova liquidação por cima.
+                    valor_liquido_esperado = formatar_valor_br(valor_bruto)
+                    documentos_existentes = _extrair_documentos_grade(page)
+
+                    if documentos_existentes:
+                        nl_existente, valor_liquido_existente = _selecionar_documento_correspondente(
+                            documentos_existentes, valor_liquido_esperado
                         )
-                        salvar_valor_gerado(worksheet, numero_linha, colunas.COL_NL_GERADA, nl_existente, rotulo="NL")
+
+                        if valor_liquido_existente == valor_liquido_esperado:
+                            log_sucesso(
+                                f"Linha {numero_linha}: NL '{nl_existente}' já lançada, valor líquido "
+                                f"{valor_liquido_existente} confere com a planilha. NL salva."
+                            )
+                            salvar_valor_gerado(worksheet, numero_linha, colunas.COL_NL_GERADA, nl_existente, rotulo="NL")
+                            execucao_linha.ok = True  # NL real que já existia (nada foi gerado agora)
+                            limpar_formulario(page)
+                            total_processadas += 1
+                            continue
+
+                        log_aviso(
+                            f"Linha {numero_linha}: já existe(m) documento(s) na grade, mas o valor "
+                            f"não confere ({valor_liquido_existente} != {valor_liquido_esperado}). "
+                            f"Prosseguindo com o lançamento normal."
+                        )
+
+                    campo_data_vencimento.fill(data_vencimento)
+                    botao_adicionar.click()
+
+                    if not _selecionar_empenho_por_numero(page, context, extrair_numero_documento(numero_ne)):
+                        continue
+
+                    # Requisito obrigatório: manter `press_sequentially()`
+                    # exatamente como está - não substituir por `.fill()`.
+                    valor_centavos = formatar_valor_centavos(valor_bruto)
+                    campo_valor_bruto.press_sequentially(valor_centavos)
+
+                    # Só prossegue depois que o campo confirma ter recebido TODO o
+                    # valor - a digitação tecla a tecla pode ficar para trás e o
+                    # clique seguinte acontecer com o valor pela metade.
+                    if not aguardar_campo_preenchido(campo_valor_bruto, valor_centavos):
+                        log_erro(
+                            f"Linha {numero_linha}: o valor bruto não foi digitado por completo "
+                            f"no SIGEF (esperado {valor_centavos}, campo com "
+                            f"'{campo_valor_bruto.input_value()}'). Pulando para a próxima linha."
+                        )
+                        limpar_formulario(page)
+                        continue
+
+                    # MODO SIMULAÇÃO: CE achada, empenho selecionado e valor
+                    # conferido - para ANTES das retenções/confirmação (que
+                    # gerariam a NL) e limpa o formulário.
+                    if em_simulacao():
+                        execucao_linha.simulado_ok(
+                            f"empenho {numero_ne}, valor R$ {formatar_valor_br(valor_bruto)}"
+                        )
                         limpar_formulario(page)
                         total_processadas += 1
                         continue
 
-                    log_aviso(
-                        f"Linha {numero_linha}: já existe(m) documento(s) na grade, mas o valor "
-                        f"não confere ({valor_liquido_existente} != {valor_liquido_esperado}). "
-                        f"Prosseguindo com o lançamento normal."
+                    botao_retencoes.click()
+                    botao_menu_n4.click()
+                    botao_confirmar.click()
+
+                    # Aguarda a grade recarregar (postback) fazendo polling da
+                    # PRÓPRIA extração, em vez de esperar a linha ficar
+                    # "visível" - as linhas (mesmo vazias, só com "&nbsp;") já
+                    # ficam visíveis antes do SIGEF preencher os dados de
+                    # verdade, então esperar só por visibilidade resolvia cedo
+                    # demais e a extração rodava com a grade ainda vazia.
+                    aguardar_pagina_estavel(page)
+
+                    documentos = []
+                    prazo = time.monotonic() + (TIMEOUT_PADRAO_SIGEF / 1000)
+                    while time.monotonic() < prazo:
+                        documentos = _extrair_documentos_grade(page)
+                        if documentos:
+                            break
+                        time.sleep(0.15)
+
+                    if not documentos:
+                        total_tabelas = page.locator("#dtgDocumentos").count()
+                        total_linhas = page.locator("#dtgDocumentos tr").count()
+                        log_erro(
+                            f"Linha {numero_linha}: nenhum documento encontrado na grade após "
+                            f"confirmar (tabela #dtgDocumentos encontrada: {total_tabelas}x, "
+                            f"total de linhas <tr> dentro dela: {total_linhas})."
+                        )
+                        continue
+
+                    # valor_liquido_esperado já foi calculado antes do
+                    # Pesquisar (reaproveitado aqui, mesmo valor da linha).
+                    nl_gerada, valor_liquido_sigef = _selecionar_documento_correspondente(
+                        documentos, valor_liquido_esperado
                     )
 
-                campo_data_vencimento.fill(data_vencimento)
-                botao_adicionar.click()
+                    if valor_liquido_sigef == valor_liquido_esperado:
+                        log_sucesso(
+                            f"Linha {numero_linha}: NL '{nl_gerada}' gerada, valor líquido "
+                            f"{valor_liquido_sigef} confere com a planilha."
+                        )
+                        salvar_valor_gerado(worksheet, numero_linha, colunas.COL_NL_GERADA, nl_gerada, rotulo="NL")
+                        total_processadas += 1
+                    else:
+                        log_erro(
+                            f"Linha {numero_linha}: valor líquido do SIGEF ({valor_liquido_sigef}) "
+                            f"não confere com o esperado pela planilha ({valor_liquido_esperado}). NL não salva."
+                        )
 
-                if not _selecionar_empenho_por_numero(page, context, extrair_numero_documento(numero_ne)):
-                    continue
-
-                # Requisito obrigatório: manter `press_sequentially()`
-                # exatamente como está - não substituir por `.fill()`.
-                valor_centavos = formatar_valor_centavos(valor_bruto)
-                campo_valor_bruto.press_sequentially(valor_centavos)
-
-                # Só prossegue depois que o campo confirma ter recebido TODO o
-                # valor - a digitação tecla a tecla pode ficar para trás e o
-                # clique seguinte acontecer com o valor pela metade.
-                if not aguardar_campo_preenchido(campo_valor_bruto, valor_centavos):
-                    log_erro(
-                        f"Linha {numero_linha}: o valor bruto não foi digitado por completo "
-                        f"no SIGEF (esperado {valor_centavos}, campo com "
-                        f"'{campo_valor_bruto.input_value()}'). Pulando para a próxima linha."
-                    )
+                    # Limpa o formulário antes de reiniciar o loop na próxima linha.
                     limpar_formulario(page)
+
+                except PlaywrightTimeoutError as erro:
+                    log_erro(f"Timeout ao processar a linha {numero_linha} da automação NL: {erro}")
+                    try:
+                        limpar_formulario(page)
+                    except Exception as erro_limpar:
+                        log_aviso(f"Linha {numero_linha}: não foi possível clicar em Limpar após o timeout: {erro_limpar}")
                     continue
 
-                botao_retencoes.click()
-                botao_menu_n4.click()
-                botao_confirmar.click()
-
-                # Aguarda a grade recarregar (postback) fazendo polling da
-                # PRÓPRIA extração, em vez de esperar a linha ficar
-                # "visível" - as linhas (mesmo vazias, só com "&nbsp;") já
-                # ficam visíveis antes do SIGEF preencher os dados de
-                # verdade, então esperar só por visibilidade resolvia cedo
-                # demais e a extração rodava com a grade ainda vazia.
-                aguardar_pagina_estavel(page)
-
-                documentos = []
-                prazo = time.monotonic() + (TIMEOUT_PADRAO_SIGEF / 1000)
-                while time.monotonic() < prazo:
-                    documentos = _extrair_documentos_grade(page)
-                    if documentos:
-                        break
-                    time.sleep(0.15)
-
-                if not documentos:
-                    total_tabelas = page.locator("#dtgDocumentos").count()
-                    total_linhas = page.locator("#dtgDocumentos tr").count()
-                    log_erro(
-                        f"Linha {numero_linha}: nenhum documento encontrado na grade após "
-                        f"confirmar (tabela #dtgDocumentos encontrada: {total_tabelas}x, "
-                        f"total de linhas <tr> dentro dela: {total_linhas})."
-                    )
+                except Exception as erro:
+                    log_erro(f"Erro ao processar a linha {numero_linha} da automação NL: {erro}")
                     continue
-
-                # valor_liquido_esperado já foi calculado antes do
-                # Pesquisar (reaproveitado aqui, mesmo valor da linha).
-                nl_gerada, valor_liquido_sigef = _selecionar_documento_correspondente(
-                    documentos, valor_liquido_esperado
-                )
-
-                if valor_liquido_sigef == valor_liquido_esperado:
-                    log_sucesso(
-                        f"Linha {numero_linha}: NL '{nl_gerada}' gerada, valor líquido "
-                        f"{valor_liquido_sigef} confere com a planilha."
-                    )
-                    salvar_valor_gerado(worksheet, numero_linha, colunas.COL_NL_GERADA, nl_gerada, rotulo="NL")
-                    total_processadas += 1
-                else:
-                    log_erro(
-                        f"Linha {numero_linha}: valor líquido do SIGEF ({valor_liquido_sigef}) "
-                        f"não confere com o esperado pela planilha ({valor_liquido_esperado}). NL não salva."
-                    )
-
-                # Limpa o formulário antes de reiniciar o loop na próxima linha.
-                limpar_formulario(page)
-
-            except PlaywrightTimeoutError as erro:
-                log_erro(f"Timeout ao processar a linha {numero_linha} da automação NL: {erro}")
-                try:
-                    limpar_formulario(page)
-                except Exception as erro_limpar:
-                    log_aviso(f"Linha {numero_linha}: não foi possível clicar em Limpar após o timeout: {erro_limpar}")
-                continue
-
-            except Exception as erro:
-                log_erro(f"Erro ao processar a linha {numero_linha} da automação NL: {erro}")
-                continue
 
         log_sucesso(
             f"Automação NL concluída: {total_processadas} de {len(dados)} linha(s) processada(s)."
         )
+        return total_processadas
 
 
 def ler_tabela_despesa_certificada(page: "Page"):
@@ -388,7 +419,9 @@ def raspar_nl(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_RASPAR_CE_SIGEF, MARCADOR_URL_RASPAR_CE)
+            context, page = conectar_e_obter_pagina_sigef(
+                p, url_do_exercicio(URL_RASPAR_CE_SIGEF, config), MARCADOR_URL_RASPAR_CE
+            )
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de listagem de despesa certificada do SIGEF: {erro}")
             return
@@ -415,9 +448,15 @@ def raspar_nl(dados, config=None, worksheet=None):
 
         # ---- Parte em loop até a última linha da planilha ------------------
         for indice, linha in enumerate(dados):
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            informar_progresso(indice + 1, len(dados))
             numero_linha = linha_inicial + indice
 
             numero_ce_bruto = obter_celula(linha, colunas.COL_NL_CE)
+            if eh_simulado(numero_ce_bruto):
+                log_aviso(f"Linha {numero_linha}: CE só simulada - nada para buscar. Pulando.")
+                continue
             if not numero_ce_bruto:
                 log_aviso(f"Linha {numero_linha}: CE vazia. Pulando.")
                 continue
@@ -503,5 +542,6 @@ def raspar_nl(dados, config=None, worksheet=None):
         log_sucesso(
             f"Automação Raspar NL concluída: {total_processadas} de {len(dados)} linha(s) processada(s)."
         )
+        return total_processadas
 
 

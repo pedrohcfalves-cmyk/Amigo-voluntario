@@ -1,11 +1,16 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """Automação CE (Despesa Certificada) e Raspar CE."""
 import time
 
 from .. import colunas
 from ..constantes import (
     URL_CE_SIGEF, MARCADOR_URL_CE, URL_RASPAR_CE_SIGEF, MARCADOR_URL_RASPAR_CE,
-    TIMEOUT_PADRAO_SIGEF,
+    TIMEOUT_PADRAO_SIGEF, ano_do_exercicio, url_do_exercicio,
 )
+from ..execucao import em_simulacao, informar_progresso, linha_em_execucao, parar_antes_da_linha
+from ..observacoes import montar_observacao
 from ..excel import obter_celula, salvar_valor_gerado
 from ..log import log_info, log_sucesso, log_erro, log_aviso
 from ..navegador import (
@@ -13,7 +18,7 @@ from ..navegador import (
     abrir_popup,
 )
 from ..playwright_compat import sync_playwright, Page, BrowserContext
-from ..utils import formatar_cpf, formatar_valor_centavos, obter_numero_mes_referencia
+from ..utils import formatar_cpf, formatar_valor_br, formatar_valor_centavos, obter_numero_mes_referencia
 
 def _preencher_campos_fixos_ce(page: "Page", config: dict) -> None:
     """
@@ -22,15 +27,13 @@ def _preencher_campos_fixos_ce(page: "Page", config: dict) -> None:
     única vez por automação (parte fixa).
     """
     mes_referencia = config.get("mes_referencia", "")
-    processo = config.get("processo", "")
     data = config.get("data", "")
 
     page.locator("#txtCdGestao_SIGEFPesquisa").fill("00001")
     page.locator("#txtNuDocumento").fill(mes_referencia)
     page.locator("#chkFlAtestadoRecSouResp").check()
-    page.locator("#txtDeObservacao").fill(
-        f"Gratificação amigo voluntario {mes_referencia} Processo: {processo}"
-    )
+    # Texto padrão ou o personalizado nos Parâmetros (ver amigo.observacoes).
+    page.locator("#txtDeObservacao").fill(montar_observacao("ce", config))
     page.locator("#txtDtAceite_SIGEFData").fill(data)
     page.locator("#txtDtApresentacao_SIGEFData").fill(data)
     page.locator("#txtDtEmissao_SIGEFData").fill(data)
@@ -113,12 +116,12 @@ def _selecionar_credor_por_cpf(
         # checagem abaixo só deixa o aviso mais preciso quando o SIGEF
         # confirma explicitamente "Não há registros a serem listados.".
         if mensagem_erro.first.is_visible():
-            print(
-                f"⚠️  CPF {cpf_formatado}: SIGEF respondeu 'Não há registros a serem "
+            log_aviso(
+                f"CPF {cpf_formatado}: SIGEF respondeu 'Não há registros a serem "
                 f"listados.'. Pulando para a próxima linha."
             )
         else:
-            print(f"⚠️  CPF {cpf_formatado}: nenhum registro encontrado no SIGEF. Pulando para a próxima linha.")
+            log_aviso(f"CPF {cpf_formatado}: nenhum registro encontrado no SIGEF. Pulando para a próxima linha.")
         popup.close()
         page.bring_to_front()
         return False
@@ -152,12 +155,12 @@ def _selecionar_empenho_por_numero(page: "Page", context: "BrowserContext", nume
 
     if not _aguardar_resultado_ou_erro_grade(resultado_grade, mensagem_erro):
         if mensagem_erro.first.is_visible():
-            print(
-                f"⚠️  NE {numero_empenho}: SIGEF respondeu 'Não há registros a serem "
+            log_aviso(
+                f"NE {numero_empenho}: SIGEF respondeu 'Não há registros a serem "
                 f"listados.'. Pulando para a próxima linha."
             )
         else:
-            print(f"⚠️  NE {numero_empenho}: nenhum registro encontrado no SIGEF. Pulando para a próxima linha.")
+            log_aviso(f"NE {numero_empenho}: nenhum registro encontrado no SIGEF. Pulando para a próxima linha.")
         popup.close()
         page.bring_to_front()
         return False
@@ -206,7 +209,8 @@ def ce(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_CE_SIGEF, MARCADOR_URL_CE)
+            log_info(f"Exercício do SIGEF: {ano_do_exercicio(config)}.")
+            context, page = conectar_e_obter_pagina_sigef(p, url_do_exercicio(URL_CE_SIGEF, config), MARCADOR_URL_CE)
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de CE do SIGEF: {erro}")
             return
@@ -228,40 +232,56 @@ def ce(dados, config=None, worksheet=None):
 
         # ---- Parte em loop até a última linha da planilha ------------------
         for indice, linha in enumerate(dados):
-            numero_linha = linha_inicial + indice
-            cpf = obter_celula(linha, colunas.COL_CE_CPF)
-            valor_bruto = obter_celula(linha, colunas.COL_CE_VALOR)
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            with linha_em_execucao("CE", worksheet, linha_inicial + indice, colunas.COL_CE_GERADA, indice + 1, len(dados)) as execucao_linha:
+                numero_linha = linha_inicial + indice
+                cpf = obter_celula(linha, colunas.COL_CE_CPF)
+                valor_bruto = obter_celula(linha, colunas.COL_CE_VALOR)
 
-            if not cpf or not valor_bruto:
-                log_aviso(f"Linha {numero_linha}: CPF ou valor vazio. Pulando.")
-                continue
-
-            try:
-                if not _selecionar_credor_por_cpf(page, context, formatar_cpf(cpf)):
+                if not cpf or not valor_bruto:
+                    log_aviso(f"Linha {numero_linha}: CPF ou valor vazio. Pulando.")
                     continue
 
-                # Requisito obrigatório: manter `press_sequentially()`
-                # exatamente como está - não substituir por `.fill()`.
-                campo_valor.press_sequentially(formatar_valor_centavos(valor_bruto))
-                botao_incluir.click()
+                execucao_linha.tentando()
+                try:
+                    if not _selecionar_credor_por_cpf(page, context, formatar_cpf(cpf)):
+                        continue
 
-                # Captura a CE gerada e salva na coluna I da mesma linha.
-                ce_gerada = campo_ce_gerada.input_value()
-                log_sucesso(f"Linha {numero_linha}: CE '{ce_gerada}' gerada para o CPF {cpf}.")
-                salvar_valor_gerado(worksheet, numero_linha, colunas.COL_CE_GERADA, ce_gerada, rotulo="CE")
+                    # Requisito obrigatório: manter `press_sequentially()`
+                    # exatamente como está - não substituir por `.fill()`.
+                    campo_valor.press_sequentially(formatar_valor_centavos(valor_bruto))
 
-                # Apaga a CE e o valor antes de reiniciar o loop na próxima linha.
-                campo_ce_gerada.fill("")
-                campo_valor.fill("")
-                total_processadas += 1
+                    # MODO SIMULAÇÃO: credor encontrado e valor digitado - para
+                    # ANTES do "Incluir" (que geraria a CE) e limpa o valor.
+                    if em_simulacao():
+                        execucao_linha.simulado_ok(
+                            f"credor {formatar_cpf(cpf)}, valor R$ {formatar_valor_br(valor_bruto)}"
+                        )
+                        campo_valor.fill("")
+                        total_processadas += 1
+                        continue
 
-            except Exception as erro:
-                log_erro(f"Erro ao processar a linha {numero_linha} da automação CE: {erro}")
-                continue
+                    botao_incluir.click()
+
+                    # Captura a CE gerada e salva na coluna I da mesma linha.
+                    ce_gerada = campo_ce_gerada.input_value()
+                    log_sucesso(f"Linha {numero_linha}: CE '{ce_gerada}' gerada para o CPF {cpf}.")
+                    salvar_valor_gerado(worksheet, numero_linha, colunas.COL_CE_GERADA, ce_gerada, rotulo="CE")
+
+                    # Apaga a CE e o valor antes de reiniciar o loop na próxima linha.
+                    campo_ce_gerada.fill("")
+                    campo_valor.fill("")
+                    total_processadas += 1
+
+                except Exception as erro:
+                    log_erro(f"Erro ao processar a linha {numero_linha} da automação CE: {erro}")
+                    continue
 
         log_sucesso(
             f"Automação CE concluída: {total_processadas} de {len(dados)} linha(s) processada(s)."
         )
+        return total_processadas
 
 
 def _extrair_ultima_despesa_certificada(page: "Page"):
@@ -329,7 +349,9 @@ def raspar_ce(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_RASPAR_CE_SIGEF, MARCADOR_URL_RASPAR_CE)
+            context, page = conectar_e_obter_pagina_sigef(
+                p, url_do_exercicio(URL_RASPAR_CE_SIGEF, config), MARCADOR_URL_RASPAR_CE
+            )
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de listagem de CE do SIGEF: {erro}")
             return
@@ -351,6 +373,9 @@ def raspar_ce(dados, config=None, worksheet=None):
 
         # ---- Parte em loop até a última linha da planilha ------------------
         for indice, linha in enumerate(dados):
+            if parar_antes_da_linha(linha_inicial + indice):
+                break
+            informar_progresso(indice + 1, len(dados))
             numero_linha = linha_inicial + indice
             cpf = obter_celula(linha, colunas.COL_CE_CPF)
 
@@ -375,7 +400,7 @@ def raspar_ce(dados, config=None, worksheet=None):
                 linhas_grade.first.wait_for(state="visible", timeout=TIMEOUT_PADRAO_SIGEF)
 
                 numero, numero_documento, valor = _extrair_ultima_despesa_certificada(page)
-                print(f"Valores da linha [{numero_linha}]: {numero}, {numero_documento}, {valor}")
+                log_info(f"Valores da linha [{numero_linha}]: {numero}, {numero_documento}, {valor}")
 
                 # Grava só o número da CE na coluna I (mesma coluna/formato
                 # que a automação CE grava) - a NL depende dessa coluna
@@ -392,5 +417,6 @@ def raspar_ce(dados, config=None, worksheet=None):
         log_sucesso(
             f"Automação Raspar CE concluída: {total_processadas} de {len(dados)} linha(s) processada(s)."
         )
+        return total_processadas
 
 

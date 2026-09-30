@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 PLAYWRIGHT - UTILIDADES GENÉRICAS (conexão via CDP)
 =====================================================
@@ -7,7 +10,10 @@ preencher e conferir campos, etc. Independentes da automação específica.
 """
 import time
 
-from .constantes import DOMINIO_SIGEF, TIMEOUT_PADRAO_SIGEF, TIMEOUT_BOTAO_LIMPAR, REGEX_APENAS_DIGITOS
+from .constantes import (
+    DOMINIO_SIGEF, TIMEOUT_PADRAO_SIGEF, TIMEOUT_BOTAO_LIMPAR, REGEX_APENAS_DIGITOS,
+    REGEX_SEGMENTO_EXERCICIO,
+)
 from .log import log_info, log_sucesso, log_erro, log_aviso
 from .playwright_compat import sync_playwright, Page, BrowserContext, PlaywrightTimeoutError
 
@@ -72,6 +78,23 @@ def conectar_navegador_sigef(playwright):
     return browser
 
 
+def _aba_esta_na_tela(url_da_aba: str, url_desejada: str, url_marker: str) -> bool:
+    """
+    A aba já está na tela certa? Precisa ter o marcador da tela (ex:
+    "FINManterDespesaCertificada") E estar no MESMO exercício da URL pedida
+    (ex: "/SIGEF2027/"). Sem a conferência do ano, em janeiro uma aba
+    esquecida aberta no SIGEF2026 seria reaproveitada e os documentos
+    sairiam no exercício errado.
+    """
+    if url_marker not in url_da_aba:
+        return False
+    exercicio_desejado = REGEX_SEGMENTO_EXERCICIO.search(url_desejada)
+    if exercicio_desejado is None:
+        return True
+    exercicio_da_aba = REGEX_SEGMENTO_EXERCICIO.search(url_da_aba)
+    return exercicio_da_aba is not None and exercicio_da_aba.group(1) == exercicio_desejado.group(1)
+
+
 def localizar_ou_abrir_pagina_sigef(context: "BrowserContext", url: str, url_marker: str) -> "Page":
     """
     Implementação genérica, reaproveitada por TODAS as automações do
@@ -109,7 +132,7 @@ def localizar_ou_abrir_pagina_sigef(context: "BrowserContext", url: str, url_mar
     for aba in context.pages:
         if DOMINIO_SIGEF not in aba.url.lower():
             continue
-        if url_marker in aba.url:
+        if _aba_esta_na_tela(aba.url, url, url_marker):
             page = aba
             break
         if candidata_generica is None:
@@ -123,7 +146,7 @@ def localizar_ou_abrir_pagina_sigef(context: "BrowserContext", url: str, url_mar
         page.goto(url)
     else:
         page.bring_to_front()
-        if url_marker not in page.url:
+        if not _aba_esta_na_tela(page.url, url, url_marker):
             page.goto(url)
 
     for aba in list(context.pages):

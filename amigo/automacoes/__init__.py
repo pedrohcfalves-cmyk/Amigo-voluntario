@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 Pacote das automações SIGEF. Cada módulo aqui dentro implementa uma etapa
 do fluxo (CE -> NL -> PP -> Raspar contas -> OB); este `__init__.py` só

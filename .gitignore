@@ -39,5 +39,21 @@ Thumbs.db
 
 # Empacotamento / build
 build/
-dist/
+# dist/ fica fora, MENOS o historico.json que o Amigo.exe grava ali.
+dist/*
+!dist/historico.json
 *.egg-info/
+*.spec
+Amigo.exe
+build.log
+build_status.txt
+
+# historico.json (Relatório/Estatísticas) é VERSIONADO de propósito: o
+# programa faz um commit só dele depois de cada automação (amigo/historico_git.py).
+
+# Cópias de segurança e arquivos temporários locais
+backup_interface_anterior/
+debug_log.txt
+py_probe.txt
+*.tgz
+Amigo.exe.antigo

@@ -8,3 +8,6 @@ pywin32>=306; sys_platform == "win32"
 
 # Playwright é usado para automatizar o navegador nas telas do SIGEF.
 playwright>=1.40
+
+# A interface gráfica (amigo/gui.py, main_gui.py) usa Tkinter, que já vem
+# junto com o Python no instalador oficial do Windows - nada a instalar.

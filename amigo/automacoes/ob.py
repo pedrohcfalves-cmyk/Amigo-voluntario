@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """Automação Gerar OB (Ordem Bancária, lote de 30 em 30), Raspar OB e Confirmar OB."""
 from typing import List, Optional
 
@@ -5,8 +8,13 @@ from .. import colunas
 from ..constantes import (
     URL_OB_SIGEF, MARCADOR_URL_OB, TIMEOUT_PADRAO_SIGEF, TIMEOUT_CLIQUE_GRADE,
     TENTATIVAS_CLIQUE_GRADE, TAMANHO_LOTE_OB, MAX_PAGINAS_LOTE_OB, REGEX_APENAS_DIGITOS,
-    REGEX_DOCUMENTO_OB,
+    REGEX_DOCUMENTO_OB, ano_do_exercicio, url_do_exercicio,
 )
+from ..execucao import (
+    eh_simulado, em_simulacao, informar_progresso, parada_pedida, texto_simulado_ok,
+    texto_simulado_problema,
+)
+from ..observacoes import montar_observacao
 from ..excel import obter_celula, atualizar_status, salvar_valor_gerado
 from ..log import log_info, log_sucesso, log_erro, log_aviso
 from ..navegador import conectar_e_obter_pagina_sigef, aguardar_pagina_estavel, fechar_paginas, abrir_popup
@@ -125,6 +133,8 @@ def _anotar_falha_ob(worksheet, item: dict, motivo: str) -> None:
         f"valor {formatar_valor_br(item['valor'])})"
     )
     log_erro(f"Linha {item['numero_linha']}: {mensagem}")
+    if em_simulacao():
+        mensagem = texto_simulado_problema(mensagem)
     atualizar_status(worksheet, item["numero_linha"], colunas.COL_OB_GERADA, mensagem)
 
 
@@ -148,6 +158,10 @@ def _abastecer_lote_ob(dados: List, cursor: int, linha_inicial: int,
         if not pp_esperado or not cpf_esperado or not valor_bruto:
             log_aviso(f"Linha {numero_linha}: PP (coluna K), CPF (coluna B) ou valor "
                       f"(coluna H) vazio. Pulando.")
+            continue
+        if eh_simulado(pp_esperado):
+            log_aviso(f"Linha {numero_linha}: a PP desta linha foi só SIMULADA - a OB precisa "
+                      f"de uma PP de verdade. Pulando.")
             continue
 
         pendentes.append({
@@ -250,18 +264,14 @@ def _preencher_cabecalho_ob(page: "Page", config: dict) -> None:
     verdade de `config["mes_referencia"]`, o mesmo campo já usado pelas
     demais automações e configurado no menu "Configurar parâmetros").
     """
-    mes_referencia = config.get("mes_referencia", "")
-    processo = config.get("processo", "")
-
     page.locator("#txtGestao_SIGEFPesquisa").fill("0001")
     page.locator("#txtBancoOrigem").fill("001")
     page.locator("#txtAgenciaOrigem").fill("2757X")
     page.locator("#txtContaOrigem").fill(config.get("conta_origem") or "100005")
     page.locator("#cboTipoOB").select_option(value="2")        # Descentralizada
     page.locator("#cboTipoPagamento").select_option(value="2")
-    page.locator("#txtDeObservacao").fill(
-        f"Ressarcimento de amigos voluntario Referente ao {mes_referencia} Processo: {processo}"
-    )
+    # Texto padrão ou o personalizado nos Parâmetros (ver amigo.observacoes).
+    page.locator("#txtDeObservacao").fill(montar_observacao("ob", config))
 
 
 def _garantir_cabecalho_ob(page: "Page", config: dict) -> None:
@@ -415,7 +425,8 @@ def gerar_ob(dados, config=None, worksheet=None):
 
     with sync_playwright() as p:
         try:
-            context, page = conectar_e_obter_pagina_sigef(p, URL_OB_SIGEF, MARCADOR_URL_OB)
+            log_info(f"Exercício do SIGEF: {ano_do_exercicio(config)}.")
+            context, page = conectar_e_obter_pagina_sigef(p, url_do_exercicio(URL_OB_SIGEF, config), MARCADOR_URL_OB)
         except Exception as erro:
             log_erro(f"Erro ao conectar à tela de Ordem Bancária do SIGEF: {erro}")
             return
@@ -425,6 +436,15 @@ def gerar_ob(dados, config=None, worksheet=None):
         total_itens_confirmados = 0
 
         while cursor < len(dados):
+            # Botão "Parar": só entre um lote e outro (nunca no meio de uma OB).
+            if parada_pedida():
+                log_aviso(
+                    f"Parada pedida pelo usuário: a automação parou antes da linha "
+                    f"{linha_inicial + cursor}. Esta linha e as seguintes não foram feitas."
+                )
+                break
+            informar_progresso(cursor, len(dados))
+
             # "Regra de continuação": só preenche de novo se necessário
             # (ver docstring de `_garantir_cabecalho_ob`).
             _garantir_cabecalho_ob(page, config)
@@ -441,6 +461,25 @@ def gerar_ob(dados, config=None, worksheet=None):
                 log_aviso("Nenhum item confirmado neste lote; nada para submeter.")
                 fechar_paginas([popup])
                 page.bring_to_front()
+                continue
+
+            # MODO SIMULAÇÃO: os itens do lote foram achados e marcados na
+            # grade (PP, CPF e valor conferidos) - fecha a pesquisa SEM
+            # confirmar o lote e sem "Incluir": nenhuma OB é gerada.
+            if em_simulacao():
+                fechar_paginas([popup])
+                page.bring_to_front()
+                for item in confirmados:
+                    salvar_valor_gerado(
+                        worksheet, item["numero_linha"], colunas.COL_OB_GERADA,
+                        texto_simulado_ok("OB", f"lote com {len(confirmados)} item(ns)"),
+                        rotulo="OB (simulação)",
+                    )
+                total_itens_confirmados += len(confirmados)
+                log_sucesso(
+                    f"SIMULAÇÃO: lote com {len(confirmados)} item(ns) conferido e pronto para gerar a "
+                    f"OB. Parou antes de confirmar: nenhuma OB foi gerada."
+                )
                 continue
 
             try:
@@ -467,10 +506,16 @@ def gerar_ob(dados, config=None, worksheet=None):
 
             _limpar_para_proximo_lote_ob(page)
 
+        informar_progresso(len(dados), len(dados))
         log_sucesso(
             f"Automação 'Gerar OB' concluída: {total_obs} OB(s) gerada(s), "
             f"{total_itens_confirmados} item(ns) confirmados de {len(dados)} linha(s) da planilha."
         )
+        # "processados" = itens (linhas) confirmados em alguma OB - mesma
+        # unidade usada pelo relatório para CE/NL/PP (1 documento por
+        # linha); "total_obs" é informativo à parte (nº de OBs GERADAS,
+        # já que cada OB agrupa até `TAMANHO_LOTE_OB` itens).
+        return total_itens_confirmados, total_obs
 
 
 def raspar_ob(dados, config=None, worksheet=None):

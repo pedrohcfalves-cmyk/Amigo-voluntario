@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Pedro Henrique Carpina Farias Alves. Todos os direitos reservados.
+# Software proprietário: uso, cópia, modificação e distribuição somente com
+# autorização por escrito do titular. Veja o arquivo LICENSE.
 """
 Reexporta os tipos/erros do Playwright usados pelo resto do sistema, com
 um "stub" de fallback quando a biblioteca não está instalada - assim,

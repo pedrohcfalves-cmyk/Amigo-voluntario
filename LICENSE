@@ -1,0 +1,73 @@
+LICENÇA DE SOFTWARE PROPRIETÁRIO
+Amigo - Automações SIGEF
+
+Copyright (c) 2026 Pedro Henrique Carpina Farias Alves.
+Todos os direitos reservados.
+
+1. TITULARIDADE
+
+   O programa de computador "Amigo - Automações SIGEF" (o "Software"),
+   incluindo seu código-fonte, código-objeto, arquivos executáveis,
+   interface gráfica, documentação, textos, estrutura e organização, é de
+   titularidade exclusiva de Pedro Henrique Carpina Farias Alves (o
+   "Titular"), e é protegido pela Lei nº 9.609/1998 (Lei do Software), pela
+   Lei nº 9.610/1998 (Lei de Direitos Autorais) e pelos tratados
+   internacionais aplicáveis.
+
+2. NENHUMA LICENÇA SEM AUTORIZAÇÃO
+
+   Nenhum direito sobre o Software é concedido pela simples posse, acesso
+   ou recebimento de uma cópia. Qualquer uso depende de autorização prévia,
+   expressa e por escrito do Titular, e fica limitado ao que essa
+   autorização permitir (pessoas, órgão, finalidade e prazo).
+
+3. É PROIBIDO, SEM AUTORIZAÇÃO POR ESCRITO DO TITULAR:
+
+   a) copiar ou reproduzir o Software, no todo ou em parte;
+   b) modificar, adaptar, traduzir ou criar obras derivadas;
+   c) distribuir, vender, alugar, emprestar, sublicenciar, publicar ou
+      disponibilizar o Software a terceiros, gratuitamente ou não;
+   d) fazer engenharia reversa, descompilar ou desmontar o executável,
+      salvo nos casos expressamente permitidos em lei;
+   e) remover ou alterar avisos de direitos autorais, esta licença ou
+      qualquer identificação de autoria.
+
+4. COMPONENTES DE TERCEIROS
+
+   O Software utiliza bibliotecas de terceiros (por exemplo, Python,
+   Tkinter, Playwright e pywin32), que continuam regidas por suas próprias
+   licenças, listadas no arquivo THIRD-PARTY-NOTICES.md. Esta licença não
+   altera nem restringe os direitos concedidos por essas licenças sobre os
+   respectivos componentes.
+
+5. AUSÊNCIA DE GARANTIAS
+
+   O Software é fornecido "no estado em que se encontra", sem garantias de
+   qualquer tipo, expressas ou implícitas, incluindo adequação a uma
+   finalidade específica ou ausência de erros. O Software interage com
+   sistemas externos (como o SIGEF, em ambiente de produção) e com
+   planilhas do usuário; cabe a quem o utiliza conferir os documentos
+   gerados e os resultados obtidos.
+
+6. LIMITAÇÃO DE RESPONSABILIDADE
+
+   Na máxima extensão permitida pela lei, o Titular não se responsabiliza
+   por danos diretos, indiretos, lucros cessantes, perda de dados ou
+   lançamentos indevidos decorrentes do uso, da impossibilidade de uso ou
+   do uso inadequado do Software.
+
+7. VIOLAÇÃO
+
+   Qualquer uso em desacordo com esta licença encerra automaticamente
+   qualquer autorização concedida e sujeita o infrator às sanções civis e
+   penais previstas na legislação, em especial no art. 12 da Lei nº
+   9.609/1998.
+
+8. LEI APLICÁVEL
+
+   Esta licença é regida pelas leis da República Federativa do Brasil.
+
+9. AUTORIZAÇÕES
+
+   Pedidos de autorização de uso, cópia, modificação ou distribuição devem
+   ser feitos diretamente ao Titular, Pedro Henrique Carpina Farias Alves.
